@@ -1,0 +1,180 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Announcement {
+  id        String   @id
+  type      String   @default("general")
+  title     String
+  body      String   @db.Text
+  image     String?  @map("image_url")
+  links     String   @default("")  @db.Text  
+  pinned    Boolean  @default(false)
+  date      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([type])
+  @@index([pinned])
+  @@index([date(sort: Desc)])
+  @@map("announcements")
+}
+
+model AdminYear {
+  id        String    @id @default(uuid()) @db.Uuid
+  year      String    @unique
+  theme     String    @default("Set a leadership theme for this year.")
+  sortOrder Int       @default(0) @map("sort_order")
+  officers  Officer[]
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  @@index([sortOrder])
+  @@map("admin_years")
+}
+
+model Officer {
+  id        String    @id @default(uuid()) @db.Uuid
+  yearId    String    @map("year_id") @db.Uuid
+  name      String    @default("Vacant Slot")
+  role      String    @default("Open Position")
+  image     String?   @map("image_url")
+  sortOrder Int       @default(0) @map("sort_order")
+
+  reportsToId String? @map("reports_to_id") @db.Uuid
+  reportsTo   Officer?  @relation("OfficerHierarchy", fields: [reportsToId], references: [id], onDelete: SetNull)
+  directReports Officer[] @relation("OfficerHierarchy")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at")
+  year      AdminYear @relation(fields: [yearId], references: [id], onDelete: Cascade)
+
+  @@index([yearId])
+  @@index([sortOrder])
+  @@index([reportsToId])
+  @@map("officers")
+}
+
+model ContactMessage {
+  id        String   @id @default(uuid()) @db.Uuid
+  clientId  String   @unique @map("client_id")
+  name      String
+  email     String
+  subject   String
+  category  String   @default("General Inquiry")
+  message   String   @db.Text
+  status    String   @default("new")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([createdAt(sort: Desc)])
+  @@index([email])
+  @@map("contact_messages")
+}
+
+model AdminUser {
+  id             String              @id @default(uuid()) @db.Uuid
+  email          String              @unique
+  name           String?
+  passwordHash   String              @map("password_hash")
+  role           String              @default("admin")
+  active         Boolean             @default(true)
+  sessions       AdminSession[]
+  mfaChallenges  AdminMfaChallenge[]
+  invitesCreated AdminInvite[]
+  createdAt      DateTime            @default(now()) @map("created_at")
+  updatedAt      DateTime            @updatedAt @map("updated_at")
+
+  @@map("admin_users")
+}
+
+model AdminSession {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime  @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("admin_sessions")
+}
+
+model AdminMfaChallenge {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String    @map("code_hash")
+  attempts  Int       @default(0)
+  consumed  Boolean   @default(false)
+  expiresAt DateTime  @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("admin_mfa_challenges")
+}
+
+model AdminInvite {
+  id        String     @id @default(uuid()) @db.Uuid
+  email     String
+  role      String     @default("admin")
+  tokenHash String     @unique @map("token_hash")
+  createdBy String     @map("created_by") @db.Uuid
+  creator   AdminUser  @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+  expiresAt DateTime   @map("expires_at")
+  usedAt    DateTime?  @map("used_at")
+  usedBy    String?    @map("used_by")
+  revokedAt DateTime?  @map("revoked_at")
+  createdAt DateTime   @default(now()) @map("created_at")
+
+  @@index([email])
+  @@index([createdBy])
+  @@index([expiresAt])
+  @@map("admin_invites")
+}
+
+model ActivityLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  action    String
+  entity    String
+  entityId  String?  @map("entity_id")
+  summary   String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([createdAt(sort: Desc)])
+  @@index([entity])
+  @@map("activity_logs")
+}
+
+model PageView {
+  id          String   @id @default(uuid()) @db.Uuid
+  visitorHash String?  @map("visitor_hash")
+  path        String
+  referrer    String?
+  device      String?
+  country     String?
+  sessionId   String?  @map("session_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([path])
+  @@index([visitorHash])
+  @@map("page_views")
+}
+model IntegrationConfig {
+  id        String   @id
+  enabled   Boolean  @default(false)
+  config    String   @default("") @db.Text
+  secret    String   @default("") @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt     @map("updated_at")
+
+  @@map("integration_configs")
+}

@@ -1,0 +1,259 @@
+"use client";
+
+import * as React from "react";
+import { Lock, LogIn, Mail, ShieldAlert } from "lucide-react";
+import { toast } from "sonner";
+
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { GearLogo } from "@/components/gear-logo";
+import { MfaVerifyForm } from "@/components/admin/mfa-verify-form";
+import { api } from "@/lib/api-client";
+import { usePageStore } from "@/lib/store";
+import { validateEmail } from "@/lib/security";
+import { validatePassword } from "@/lib/validation";
+import type { AdminUserPublic } from "@/lib/types";
+
+const GENERIC_ERROR = "Invalid email or password.";
+const MAX_ATTEMPTS = 5;
+const WINDOW_MS = 60_000;
+
+interface MfaState {
+  challengeId: string;
+  emailMasked: string;
+  delivered: boolean;
+}
+
+export function LoginForm() {
+  const setIsAdmin = usePageStore((s) => s.setIsAdmin);
+  const setAdminEmail = usePageStore((s) => s.setAdminEmail);
+
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [error, setError] = React.useState<string | null>(null);
+  const [submitting, setSubmitting] = React.useState(false);
+  const [mfa, setMfa] = React.useState<MfaState | null>(null);
+
+  const attemptsRef = React.useRef<number[]>([]);
+  const [retryIn, setRetryIn] = React.useState(0);
+
+  React.useEffect(() => {
+    if (retryIn <= 0) return;
+    const id = window.setInterval(() => {
+      setRetryIn((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [retryIn]);
+
+  if (mfa) {
+    return (
+      <MfaVerifyForm
+        initialChallengeId={mfa.challengeId}
+        emailMasked={mfa.emailMasked}
+        delivered={mfa.delivered}
+        onBack={() => {
+          setMfa(null);
+          setPassword("");
+          setError(null);
+        }}
+        onSuccess={(user) => {
+          setIsAdmin(true);
+          setAdminEmail(user.email);
+          toast.success("Signed in", {
+            description: `Welcome back, ${user.email}.`,
+          });
+        }}
+      />
+    );
+  }
+
+  const showFieldError = (valid: boolean, _msg: string) => {
+    if (!valid) {
+      setError(GENERIC_ERROR);
+      return false;
+    }
+    return true;
+  };
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (submitting) return;
+
+    const now = Date.now();
+    attemptsRef.current = attemptsRef.current.filter(
+      (t) => now - t < WINDOW_MS,
+    );
+    if (attemptsRef.current.length >= MAX_ATTEMPTS) {
+      const oldest = attemptsRef.current[0];
+      const wait = Math.ceil((WINDOW_MS - (now - oldest)) / 1000);
+      setRetryIn(wait);
+      setError(`Too many attempts. Please wait ${wait}s before trying again.`);
+      return;
+    }
+
+    const emailOk = validateEmail(email);
+    const passOk = validatePassword(password, { minLen: 1, maxLen: 128 });
+    if (!showFieldError(emailOk.valid, emailOk.error ?? "")) return;
+    if (!showFieldError(passOk.valid, passOk.error ?? "")) return;
+
+    setError(null);
+    setSubmitting(true);
+    attemptsRef.current.push(now);
+
+    try {
+      const { data, error: apiError } = await api.post<{
+        user?: AdminUserPublic;
+        requiresMfa?: boolean;
+        challengeId?: string;
+        emailMasked?: string;
+        delivered?: boolean;
+      }>("/api/auth/login", { email, password });
+
+      if (apiError || !data) {
+        const msg =
+          apiError && apiError.status === 429
+            ? apiError.message
+            : GENERIC_ERROR;
+        setError(msg);
+        if (apiError && apiError.status === 429) {
+          setRetryIn(60);
+        }
+        return;
+      }
+
+      if (data.requiresMfa && data.challengeId) {
+        setMfa({
+          challengeId: data.challengeId,
+          emailMasked: data.emailMasked ?? "",
+          delivered: data.delivered ?? false,
+        });
+        setPassword("");
+        return;
+      }
+
+      if (data.user) {
+        setIsAdmin(true);
+        setAdminEmail(data.user.email);
+        toast.success("Signed in", {
+          description: `Welcome back, ${data.user.email}.`,
+        });
+      }
+    } catch {
+      setError("Something went wrong. Please try again.");
+    } finally {
+      setSubmitting(false);
+      setPassword("");
+    }
+  }
+
+  const locked = retryIn > 0;
+  const disabled = submitting || locked;
+
+  return (
+    <div className="flex min-h-[50vh] items-center justify-center px-4 py-12 pb-32 sm:px-6">
+      <Card className="w-full max-w-md border-border/60 shadow-lg">
+        <CardHeader className="items-center gap-3 text-center">
+          <div className="flex w-full justify-center">
+            <GearLogo size={56} />
+          </div>
+          <div className="space-y-1">
+            <CardTitle className="font-display text-2xl">
+              Admin Sign In
+            </CardTitle>
+            <CardDescription>
+              Restricted area. Authorized administrators only.
+            </CardDescription>
+          </div>
+        </CardHeader>
+
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+            <div className="space-y-2">
+              <Label
+                htmlFor="admin-email"
+                className="text-xs uppercase tracking-wider"
+              >
+                <Mail className="size-3.5" aria-hidden="true" />
+                Email
+              </Label>
+              <Input
+                id="admin-email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                disabled={disabled}
+                aria-required="true"
+                aria-invalid={!!error}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label
+                htmlFor="admin-password"
+                className="text-xs uppercase tracking-wider"
+              >
+                <Lock className="size-3.5" aria-hidden="true" />
+                Password
+              </Label>
+              <Input
+                id="admin-password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Your password"
+                disabled={disabled}
+                aria-required="true"
+                aria-invalid={!!error}
+              />
+            </div>
+
+            {error && (
+              <Alert variant="destructive" role="alert">
+                <ShieldAlert aria-hidden="true" />
+                <AlertTitle>Sign-in failed</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            <Button
+              type="submit"
+              className="w-full"
+              size="lg"
+              disabled={disabled}
+              aria-label="Sign in to admin panel"
+            >
+              {submitting ? (
+                <>
+                  <span
+                    className="size-4 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground"
+                    aria-hidden="true"
+                  />
+                  Signing in...
+                </>
+              ) : locked ? (
+                <>Please wait {retryIn}s</>
+              ) : (
+                <>
+                  <LogIn aria-hidden="true" />
+                  Sign In
+                </>
+              )}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
